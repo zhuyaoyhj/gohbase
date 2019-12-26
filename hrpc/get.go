@@ -68,6 +68,10 @@ func (g *Get) setSkipBatch(v bool) {
 	g.skipbatch = v
 }
 
+func (g *Get) SetSkipBatch(v bool) {
+	g.skipbatch = v
+}
+
 // ExistsOnly makes this Get request not return any KeyValue, merely whether
 // or not the given row key exists in the table.
 func (g *Get) ExistsOnly() {

@@ -293,6 +293,10 @@ func (m *Mutate) setSkipBatch(v bool) {
 	m.skipbatch = v
 }
 
+func (m *Mutate) SetSkipBatch(v bool) {
+	m.skipbatch = v
+}
+
 func (m *Mutate) toProto() *pb.MutateRequest {
 	var ts *uint64
 	if m.timestamp != MaxTimestamp {
