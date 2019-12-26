@@ -16,9 +16,9 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	log "github.com/sirupsen/logrus"
-	"github.com/tsuna/gohbase/hrpc"
-	"github.com/tsuna/gohbase/region"
-	"github.com/tsuna/gohbase/zk"
+	"github.com/zhuyaoyhj/gohbase/hrpc"
+	"github.com/zhuyaoyhj/gohbase/region"
+	"github.com/zhuyaoyhj/gohbase/zk"
 )
 
 // Constants
@@ -57,10 +57,11 @@ const (
 func (c *client) getRegionForRpc(rpc hrpc.Call) (hrpc.RegionInfo, error) {
 	for i := 0; i < maxFindRegionTries; i++ {
 		// Check the cache for a region that can handle this request
+		fmt.Println("getRegionFromCache", string(rpc.Table()), string(rpc.Key()))
 		if reg := c.getRegionFromCache(rpc.Table(), rpc.Key()); reg != nil {
 			return reg, nil
 		}
-
+		fmt.Println("findRegion", rpc.Context(), string(rpc.Table()), string(rpc.Key()))
 		if reg, err := c.findRegion(rpc.Context(), rpc.Table(), rpc.Key()); reg != nil {
 			return reg, nil
 		} else if err == errMetaLookupThrottled {
@@ -75,6 +76,57 @@ func (c *client) getRegionForRpc(rpc hrpc.Call) (hrpc.RegionInfo, error) {
 	return nil, ErrCannotFindRegion
 }
 
+func (c *client) SendMultiRPC(rpc *hrpc.Multi) (proto.Message, error) {
+	calls := rpc.GetCalls()
+	var regs []hrpc.RegionInfo
+	for _, call := range calls {
+		reg, err := c.getRegionForRpc(call)
+		if err != nil {
+			return nil, err
+		}
+		regs = append(regs, reg)
+		fmt.Println("calls", call, calls[0])
+	}
+
+	backoff := backoffStart
+	for {
+		fmt.Println("SendMultiRPC", regs[0].IsUnavailable())
+
+		msg, err := c.sendMultiRPCToRegion(rpc, regs)
+		fmt.Println("Send RPC end, err", msg, err, regs)
+		switch err.(type) {
+		case region.RetryableError:
+			backoff, err = sleepAndIncreaseBackoff(rpc.Context(), backoff)
+			if err != nil {
+				return msg, err
+			}
+		case region.ServerError, region.NotServingRegionError:
+			if ch := regs[0].AvailabilityChan(); ch != nil {
+				// The region is unavailable. Wait for it to become available,
+				// a new region or for the deadline to be exceeded.
+				select {
+				case <-rpc.Context().Done():
+					return nil, rpc.Context().Err()
+				case <-c.done:
+					return nil, ErrClientClosed
+				case <-ch:
+				}
+			}
+			if regs[0].Context().Err() != nil {
+				// region is dead because it was split or merged,
+				// lookup a new one and retry
+				_, err = c.getRegionForRpc(calls[0])
+				if err != nil {
+					return nil, err
+				}
+			}
+		default:
+
+			return msg, err
+		}
+	}
+}
+
 func (c *client) SendRPC(rpc hrpc.Call) (proto.Message, error) {
 	reg, err := c.getRegionForRpc(rpc)
 	if err != nil {
@@ -84,6 +136,7 @@ func (c *client) SendRPC(rpc hrpc.Call) (proto.Message, error) {
 	backoff := backoffStart
 	for {
 		msg, err := c.sendRPCToRegion(rpc, reg)
+		fmt.Println("sendRPCRegion", msg, err)
 		switch err.(type) {
 		case region.RetryableError:
 			backoff, err = sleepAndIncreaseBackoff(rpc.Context(), backoff)
@@ -129,7 +182,65 @@ func sendBlocking(rc hrpc.RegionClient, rpc hrpc.Call) (hrpc.RPCResult, error) {
 	}
 }
 
+func (c *client) sendMultiRPCToRegion(rpc *hrpc.Multi, reg []hrpc.RegionInfo) (proto.Message, error) {
+	fmt.Println("regionInfo", reg)
+	for _, v := range reg {
+		if v.IsUnavailable() {
+			return nil, region.NotServingRegionError{}
+		}
+	}
+	fmt.Println("send multi rpc to region")
+	rpc.SetRegions(reg)
+	fmt.Println("set region end")
+	// Queue the RPC to be sent to the region
+	client := reg[0].Client()
+	fmt.Println("client", (client == nil))
+	if client == nil {
+		// There was an error queueing the RPC.
+		// Mark the region as unavailable.
+		if reg[0].MarkUnavailable() {
+			// If this was the first goroutine to mark the region as
+			// unavailable, start a goroutine to reestablish a connection
+			go c.reestablishRegion(reg[0])
+		}
+		return nil, region.NotServingRegionError{}
+	}
+	res, err := sendBlocking(client, rpc)
+	if err != nil {
+		return nil, err
+	}
+	// Check for errors
+	switch res.Error.(type) {
+	case region.NotServingRegionError:
+		// There's an error specific to this region, but
+		// our region client is fine. Mark this region as
+		// unavailable (as opposed to all regions sharing
+		// the client), and start a goroutine to reestablish
+		// it.
+		if reg[0].MarkUnavailable() {
+			go c.reestablishRegion(reg[0])
+		}
+	case region.ServerError:
+		// If it was an unrecoverable error, the region client is
+		// considered dead.
+		if reg[0] == c.adminRegionInfo {
+			// If this is the admin client, mark the region
+			// as unavailable and start up a goroutine to
+			// reconnect if it wasn't already marked as such.
+			if reg[0].MarkUnavailable() {
+				go c.reestablishRegion(reg[0])
+			}
+		} else {
+			c.clientDown(client)
+		}
+	}
+	fmt.Println("return ", res.Msg, res.Error)
+	return res.Msg, res.Error
+}
+
 func (c *client) sendRPCToRegion(rpc hrpc.Call, reg hrpc.RegionInfo) (proto.Message, error) {
+	fmt.Println("isUnavailable", reg.IsUnavailable())
+
 	if reg.IsUnavailable() {
 		return nil, region.NotServingRegionError{}
 	}
@@ -137,6 +248,7 @@ func (c *client) sendRPCToRegion(rpc hrpc.Call, reg hrpc.RegionInfo) (proto.Mess
 
 	// Queue the RPC to be sent to the region
 	client := reg.Client()
+	fmt.Println("client", (client == nil))
 	if client == nil {
 		// There was an error queueing the RPC.
 		// Mark the region as unavailable.
@@ -176,6 +288,7 @@ func (c *client) sendRPCToRegion(rpc hrpc.Call, reg hrpc.RegionInfo) (proto.Mess
 			c.clientDown(client)
 		}
 	}
+	fmt.Println("return ", res.Msg, res.Error)
 	return res.Msg, res.Error
 }
 

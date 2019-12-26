@@ -10,7 +10,7 @@ import (
 	"errors"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/tsuna/gohbase/pb"
+	"github.com/zhuyaoyhj/gohbase/pb"
 )
 
 type snap struct {

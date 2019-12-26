@@ -14,10 +14,10 @@ import (
 	"github.com/cznic/b"
 	"github.com/golang/protobuf/proto"
 	log "github.com/sirupsen/logrus"
-	"github.com/tsuna/gohbase/hrpc"
-	"github.com/tsuna/gohbase/pb"
-	"github.com/tsuna/gohbase/region"
-	"github.com/tsuna/gohbase/zk"
+	"github.com/zhuyaoyhj/gohbase/hrpc"
+	"github.com/zhuyaoyhj/gohbase/pb"
+	"github.com/zhuyaoyhj/gohbase/region"
+	"github.com/zhuyaoyhj/gohbase/zk"
 	"golang.org/x/time/rate"
 )
 
@@ -41,6 +41,7 @@ type Client interface {
 	Get(g *hrpc.Get) (*hrpc.Result, error)
 	Put(p *hrpc.Mutate) (*hrpc.Result, error)
 	Delete(d *hrpc.Mutate) (*hrpc.Result, error)
+	Multi(m *hrpc.Multi) (*pb.MultiResponse, error)
 	Append(a *hrpc.Mutate) (*hrpc.Result, error)
 	Increment(i *hrpc.Mutate) (int64, error)
 	CheckAndPut(p *hrpc.Mutate, family string, qualifier string,
@@ -238,6 +239,25 @@ func (c *client) Delete(d *hrpc.Mutate) (*hrpc.Result, error) {
 
 func (c *client) Append(a *hrpc.Mutate) (*hrpc.Result, error) {
 	return c.mutate(a)
+}
+
+func (c *client) Multi(a *hrpc.Multi) (*pb.MultiResponse, error) {
+	return c.Multimutate(a)
+}
+
+func (c *client) Multimutate(m *hrpc.Multi) (*pb.MultiResponse, error) {
+
+	pbmsg, err := c.SendMultiRPC(m)
+	if err != nil {
+		return nil, err
+	}
+
+	r, ok := pbmsg.(*pb.MultiResponse)
+	if !ok {
+		return nil, fmt.Errorf("sendRPC returned not a MutateResponse")
+	}
+
+	return r, nil
 }
 
 func (c *client) Increment(i *hrpc.Mutate) (int64, error) {

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/tsuna/gohbase/pb"
+	"github.com/zhuyaoyhj/gohbase/pb"
 )
 
 var (
@@ -290,6 +290,10 @@ func (m *Mutate) SkipBatch() bool {
 }
 
 func (m *Mutate) setSkipBatch(v bool) {
+	m.skipbatch = v
+}
+
+func (m *Mutate) SetSkipBatch(v bool) {
 	m.skipbatch = v
 }
 

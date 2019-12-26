@@ -9,7 +9,7 @@ import (
 	"context"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/tsuna/gohbase/pb"
+	"github.com/zhuyaoyhj/gohbase/pb"
 )
 
 // Get represents a Get HBase call.
@@ -65,6 +65,10 @@ func (g *Get) SkipBatch() bool {
 }
 
 func (g *Get) setSkipBatch(v bool) {
+	g.skipbatch = v
+}
+
+func (g *Get) SetSkipBatch(v bool) {
 	g.skipbatch = v
 }
 
