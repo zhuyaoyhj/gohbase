@@ -12,7 +12,7 @@ import (
 
 	"github.com/cznic/b"
 	log "github.com/sirupsen/logrus"
-	"github.com/tsuna/gohbase/hrpc"
+	"github.com/zhuyaoyhj/gohbase/hrpc"
 )
 
 // clientRegionCache is client -> region cache. Used to quickly
